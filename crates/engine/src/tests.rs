@@ -152,6 +152,17 @@ fn marquee_dragged_past_the_canvas_stops_at_its_edge() {
 }
 
 #[test]
+fn marquee_steps_are_named_after_their_tool() {
+    // #513: the elliptical marquee shares `select.rect` but records its own step name.
+    let mut s = session_with_doc();
+    let last = |s: &Session| s.active().unwrap().history.undo_label().map(str::to_string);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 10, "ellipse": true})).unwrap();
+    assert_eq!(last(&s).as_deref(), Some("Elliptical Marquee"));
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 10})).unwrap();
+    assert_eq!(last(&s).as_deref(), Some("Rectangular Marquee"));
+}
+
+#[test]
 fn selection_modes() {
     let mut s = session_with_doc();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
