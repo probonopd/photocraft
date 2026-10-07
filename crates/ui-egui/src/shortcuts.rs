@@ -231,7 +231,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.distort.liquify.is_some() && !ctx.text_edit_focused() {
         crate::liquify_ui::keys(app, ctx);
     }
-    use crate::shortcut_dispatch::{Focus, dispatch, pressed_command};
+    use crate::shortcut_dispatch::{Focus, dispatch_pressed};
     let focus = Focus::of(ctx);
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
@@ -245,9 +245,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if focus == Focus::Text {
         // A focused field keeps its typing and editing keys; menu shortcuts (⌘J, ⌘S, F7…) still
         // fire, as in Photoshop.
-        if let Some(id) = pressed_command(app, ctx, focus, false) {
-            dispatch(app, ctx, &id);
-        }
+        dispatch_pressed(app, ctx, focus, false);
         return;
     }
     // Liquify / Puppet Warp / Perspective Warp: ↩ commits, Esc cancels.
@@ -283,8 +281,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Inline type editing eats text and navigation keys; ⌘-shortcuts still reach the menus.
     let editing = crate::type_tool::handle_keys(app, ctx);
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
-    if let Some(id) = pressed_command(app, ctx, focus, editing) {
-        dispatch(app, ctx, &id);
+    if dispatch_pressed(app, ctx, focus, editing) {
         return;
     }
     if editing {
