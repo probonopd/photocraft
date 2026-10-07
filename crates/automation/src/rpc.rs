@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 
 use crate::budgets::{BatchReplyBudget, write_reply};
 use crate::security::{
-    ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply, configure_stream, read_bounded_line,
+    ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply, configure_stream, discard_rest_of_line,
+    read_bounded_line,
 };
 use crate::{AutomationError, Headless};
 
@@ -202,25 +203,24 @@ pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
     }
 }
 
-/// Serve JSON lines from `r` to `w` until EOF. Blank lines are ignored.
+/// Serve JSON lines from `r` to `w` until EOF. Blank lines are ignored. An over-long or non-UTF-8
+/// line gets an error reply and is skipped; the session (and its open documents) keeps serving.
 pub fn serve_lines(h: &Mutex<Headless>, mut r: impl BufRead, mut w: impl Write) -> std::io::Result<()> {
     let mut line = String::new();
     loop {
-        match read_bounded_line(&mut r, &mut line)? {
-            LineRead::Eof => return Ok(()),
-            LineRead::TooLong => {
-                write_reply(&mut w, &json!({"id": null, "ok": false, "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes")}))?;
-                w.flush()?;
-                return Ok(());
-            }
-            LineRead::Line => {}
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-        let reply = respond(h, &line);
+        let (reply, unread_rest) = match read_bounded_line(&mut r, &mut line) {
+            Ok(LineRead::Eof) => return Ok(()),
+            Ok(LineRead::TooLong) => (json!({"id": null, "ok": false, "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes")}), !line.ends_with('\n')),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => (json!({"id": null, "ok": false, "error": "request is not valid UTF-8"}), false),
+            Err(e) => return Err(e),
+            Ok(LineRead::Line) if line.trim().is_empty() => continue,
+            Ok(LineRead::Line) => (respond(h, &line), false),
+        };
         write_reply(&mut w, &reply)?;
         w.flush()?;
+        if unread_rest {
+            discard_rest_of_line(&mut r)?;
+        }
     }
 }
 
@@ -502,6 +502,28 @@ mod tests {
         assert_eq!(reply["ok"], false);
         assert!(reply["error"].as_str().unwrap().contains("request exceeds"));
         assert!(h.lock().unwrap().session.documents().is_empty());
+    }
+
+    /// Regression (#505): an over-long or non-UTF-8 line ended the stdio session, losing every
+    /// open document. Now it gets one error reply, the rest of the line is skipped (never
+    /// dispatched), and the next request is served.
+    #[test]
+    fn stdio_skips_a_rejected_line_and_keeps_the_session() {
+        let h = Mutex::new(Headless::new());
+        let mut input = b"{\"id\":1,\"method\":\"doc.new\",\"params\":{\"width\":8,\"height\":8}}\n".to_vec();
+        input.extend(" ".repeat(MAX_REQUEST_BYTES + 1).into_bytes());
+        input.extend(b"{\"id\":9,\"method\":\"doc.close\"}\n");
+        input.extend(b"\xff\xfe{\"id\":8,\"method\":\"doc.close\"}\n");
+        input.extend(b"{\"id\":2,\"method\":\"session.list\"}\n");
+        let mut out = Vec::new();
+        serve_lines(&h, input.as_slice(), &mut out).unwrap();
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(replies.len(), 4, "{replies:?}");
+        assert_eq!(replies[0]["ok"], true);
+        assert!(replies[1]["error"].as_str().unwrap().contains("request exceeds"), "{}", replies[1]);
+        assert!(replies[2]["error"].as_str().unwrap().contains("not valid UTF-8"), "{}", replies[2]);
+        assert_eq!(replies[3]["id"], 2);
+        assert_eq!(replies[3]["result"]["documents"].as_array().unwrap().len(), 1, "the document stays open");
     }
 
     #[test]

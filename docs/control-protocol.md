@@ -230,7 +230,9 @@ The desktop and headless TCP listeners currently enforce:
 
 An oversized line, excess connection, unauthenticated request, or unauthorized filesystem path is
 rejected before command dispatch or file effects. The headless JSON-lines stdio server also
-enforces the request and reply byte ceilings. MCP tool results are checked as encoded JSON,
+enforces the request and reply byte ceilings. A TCP connection is closed after an oversized
+line; on stdio an oversized or non-UTF-8 line gets one error reply (`id: null`), the rest of that
+line is skipped without being dispatched, and the session and its open documents keep serving. MCP tool results are checked as encoded JSON,
 including the text/image content envelope, and the MCP bridge bounds incoming desktop replies.
 
 Headless automation previews (`doc.render` / MCP `doc_render_preview`) allow a maximum requested
