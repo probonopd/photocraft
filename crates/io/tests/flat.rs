@@ -225,3 +225,74 @@ fn psd_to_png_to_psd_chain() {
     let psd2 = export(&d3, "b.psd", &ExportOptions::default()).unwrap();
     assert!(photocraft_psd::PsdFile::from_bytes(&psd2.bytes).is_ok());
 }
+
+/// A one-layer document of 16-pixel-wide columns, each one straight colour (colour channels, then alpha).
+fn columns(mode: ColorMode, depth: SampleType, cols: &[&[f32]]) -> photocraft_doc::Document {
+    let mut d = photocraft_doc::Document::new("c", photocraft_geom::Size::new(16 * cols.len() as u32, 16), mode, depth);
+    let mut s = photocraft_raster::Surface::new(d.pixel_format());
+    for (i, px) in cols.iter().enumerate() {
+        let x = 16 * i as i32;
+        s.fill_rect(photocraft_geom::Rect::new(x, 0, x + 16, 16), px);
+    }
+    d.layers.push(photocraft_doc::Layer::new("Layer", photocraft_doc::LayerContent::Raster(s)));
+    d
+}
+
+/// The pixel at the centre of each column of `doc`.
+fn column_pixels(doc: &photocraft_doc::Document, n: usize) -> Vec<Vec<f32>> {
+    let s = doc.layers[0].surface().unwrap();
+    (0..n).map(|i| s.pixel(16 * i as i32 + 8, 8)).collect()
+}
+
+/// Asserts the leading (colour) channels of `got` are within `tol` of `want`.
+fn assert_colors(got: &[Vec<f32>], want: &[Vec<f32>], tol: f32, what: &str) {
+    for (g, w) in got.iter().zip(want) {
+        assert!(w.iter().zip(g).all(|(a, b)| (a - b).abs() <= tol), "{what}: got {got:?}, want {want:?}");
+    }
+}
+
+/// Formats that can't embed a profile get sRGB values (what an untagged file means), converted
+/// through the colour engine, instead of values that only mean something under the dropped profile.
+#[test]
+fn non_srgb_rgb_is_converted_to_srgb_for_formats_without_a_profile() {
+    use photocraft_cms::{Builtin, Intent, Transform};
+    let cols: [&[f32]; 3] = [&[0.0, 0.05, 0.0, 1.0], &[0.2, 0.5, 0.8, 1.0], &[1.0, 0.25, 0.0, 1.0]];
+    for (profile, depth) in [(Builtin::LinearSrgb, SampleType::F32), (Builtin::LinearSrgb, SampleType::U16), (Builtin::DisplayP3, SampleType::U8)] {
+        let mut d = columns(ColorMode::Rgb, depth, &cols);
+        d.icc_profile = Some(profile.profile().to_bytes());
+        let stored = column_pixels(&d, cols.len());
+        let t = Transform::new(profile.profile(), Builtin::Srgb.profile(), Intent::Perceptual, true).unwrap();
+        let want: Vec<Vec<f32>> = stored
+            .iter()
+            .map(|p| {
+                let mut v = p.clone();
+                t.apply(&mut v, 4);
+                // The formats hold 8-bit sRGB: out-of-gamut colours clip.
+                v.iter().map(|c| c.clamp(0.0, 1.0)).collect()
+            })
+            .collect();
+        for ext in ["bmp", "gif", "qoi", "tga"] {
+            let what = format!("{profile:?} {depth:?} {ext}");
+            let r = export(&d, ext, &ExportOptions::default()).unwrap();
+            assert!(r.warnings.iter().any(|w| w.contains("converted to sRGB")), "{what}: {:?}", r.warnings);
+            assert!(!r.warnings.iter().any(|w| w.contains("ICC profile")), "{what}: {:?}", r.warnings);
+            let back = import(&format!("a.{ext}"), &r.bytes).unwrap().document;
+            assert_eq!(back.icc_profile, None, "{what}");
+            assert_colors(&column_pixels(&back, cols.len()), &want, 1.5 / 255.0, &what);
+        }
+        // Formats that embed the profile keep it and the values.
+        let r = export(&d, "a.png", &ExportOptions::default()).unwrap();
+        let back = import("a.png", &r.bytes).unwrap().document;
+        assert_eq!(back.icc_profile, d.icc_profile, "{profile:?} {depth:?}");
+        assert_colors(&column_pixels(&back, cols.len()), &stored, 1e-4, &format!("{profile:?} {depth:?} png"));
+    }
+    // sRGB (tagged or not) is written unchanged.
+    for icc in [None, Some(Builtin::Srgb.profile().to_bytes())] {
+        let mut d = columns(ColorMode::Rgb, SampleType::U8, &cols);
+        d.icc_profile = icc;
+        let r = export(&d, "a.bmp", &ExportOptions::default()).unwrap();
+        assert!(!r.warnings.iter().any(|w| w.contains("converted to sRGB")), "{:?}", r.warnings);
+        let back = import("a.bmp", &r.bytes).unwrap().document;
+        assert_colors(&column_pixels(&back, cols.len()), &column_pixels(&d, cols.len()), 0.0, "sRGB bmp");
+    }
+}
