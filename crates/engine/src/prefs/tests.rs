@@ -15,6 +15,8 @@ fn defaults_match_photoshop() {
     assert_eq!(p.transparency_and_gamut.colors(), [[255, 255, 255], [204, 204, 204]]);
     assert_eq!(p.transparency_and_gamut.square(), Some(8.0));
     assert_eq!(p.cursors.painting, PaintingCursor::NormalTip);
+    // Linux global menu: on until the user switches it off (Interface › Use Global Menu Bar).
+    assert!(p.interface.global_menu_bar);
     // Every dialog section is a key of the JSON form.
     let v = p.to_json();
     for (id, _) in SECTIONS {
@@ -60,6 +62,16 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
     assert_eq!(s.prefs().interface.light_theme, LightTheme::StudioLight);
     assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
+}
+
+#[test]
+fn global_menu_bar_preference_round_trips() {
+    let mut s = session();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.globalMenuBar"})).unwrap(), json!(true));
+    s.execute("prefs.set", json!({"path": "interface.globalMenuBar", "value": false})).unwrap();
+    assert!(!s.prefs().interface.global_menu_bar);
+    s.execute("prefs.reset", json!({"path": "interface.globalMenuBar"})).unwrap();
+    assert!(s.prefs().interface.global_menu_bar);
 }
 
 #[test]
