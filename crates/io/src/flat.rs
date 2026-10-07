@@ -261,6 +261,11 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
     }
     let mut warnings = Vec::new();
     let mut img = document_to_image(doc, &mut warnings)?;
+    if img.layout().has_alpha() && !format.caps().alpha {
+        // Flattened over white, as saving a transparent document without transparency does.
+        img = matte_over_white(&img)?;
+        warnings.push(format!("transparency composited over white for {format:?}"));
+    }
     if img.layout().is_cmyk() && !format.caps().layouts.iter().any(|l| l.is_cmyk()) {
         img = cmyk_image_to_srgb(&img)?;
         warnings.push(format!("CMYK converted to sRGB for {format:?} through the document's colour profile"));
@@ -302,6 +307,22 @@ fn map_bands(img: &Image, layout: ChannelLayout, sample: CSample, f: impl Fn(Vec
         data.extend_from_slice(Image::from_normalized(w, n, layout, sample, &vals)?.data());
     }
     Ok(Image::from_raw(w, h, layout, sample, data)?.with_icc(img.icc.clone()).with_meta(img.meta.clone()))
+}
+
+/// Straight-alpha pixels composited over white (no ink for CMYK), without the alpha channel.
+fn matte_over_white(img: &Image) -> Result<Image, IoError> {
+    let layout = img.layout();
+    let white = if layout.is_cmyk() { 0.0 } else { 1.0 };
+    map_bands(img, layout.without_alpha(), img.sample_type(), |vals| {
+        let mut out = Vec::with_capacity(vals.len() / layout.channels() * layout.color_channels());
+        for px in vals.chunks_exact(layout.channels()) {
+            if let Some((&a, color)) = px.split_last() {
+                let a = a.clamp(0.0, 1.0);
+                out.extend(color.iter().map(|&c| c * a + white * (1.0 - a)));
+            }
+        }
+        out
+    })
 }
 
 /// RGB pixels converted from their profile (sRGB when untagged) to `dst`, unclamped, untagged and

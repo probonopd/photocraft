@@ -251,6 +251,43 @@ fn assert_colors(got: &[Vec<f32>], want: &[Vec<f32>], tol: f32, what: &str) {
     }
 }
 
+/// Formats without alpha get the document composited over white, as flattening does, instead of
+/// its alpha dropped (which shows the colours stored under transparent pixels).
+#[test]
+fn transparency_is_composited_over_white_for_formats_without_alpha() {
+    let rgb: [&[f32]; 3] = [&[0.0, 0.0, 0.0, 0.0], &[0.0, 0.0, 1.0, 0.5], &[0.0, 0.63, 0.0, 1.0]];
+    let over_white = vec![vec![1.0, 1.0, 1.0], vec![0.5, 0.5, 1.0], vec![0.0, 0.63, 0.0]];
+    let gray: [&[f32]; 2] = [&[0.0, 0.0], &[0.0, 0.5]];
+    // CMYK white is no ink.
+    let cmyk: [&[f32]; 2] = [&[1.0, 1.0, 1.0, 1.0, 0.0], &[0.0, 0.0, 0.0, 1.0, 0.5]];
+    let cases = [
+        (ColorMode::Rgb, SampleType::U8, &rgb[..], over_white.clone()),
+        (ColorMode::Rgb, SampleType::U16, &rgb[..], over_white.clone()),
+        (ColorMode::Rgb, SampleType::F32, &rgb[..], over_white),
+        (ColorMode::Grayscale, SampleType::U8, &gray[..], vec![vec![1.0], vec![0.5]]),
+        (ColorMode::Cmyk, SampleType::U8, &cmyk[..], vec![vec![0.0; 4], vec![0.0, 0.0, 0.0, 0.5]]),
+    ];
+    for (mode, depth, cols, want) in cases {
+        let what = format!("{mode:?} {depth:?}");
+        let d = columns(mode, depth, cols);
+        let r = export(&d, "a.jpg", &ExportOptions::default()).unwrap();
+        assert!(r.warnings.iter().any(|w| w.contains("composited over white")), "{what}: {:?}", r.warnings);
+        assert!(!r.warnings.iter().any(|w| w.contains("alpha will be discarded")), "{what}: {:?}", r.warnings);
+        let back = import("a.jpg", &r.bytes).unwrap().document;
+        assert_eq!(back.mode, mode, "{what}");
+        assert_colors(&column_pixels(&back, cols.len()), &want, 0.03, &what);
+        // PNG keeps the transparency itself.
+        let r = export(&d, "a.png", &ExportOptions::default()).unwrap();
+        assert!(!r.warnings.iter().any(|w| w.contains("composited")), "{what}: {:?}", r.warnings);
+        let back = import("a.png", &r.bytes).unwrap().document;
+        let alpha = column_pixels(&back, cols.len())[1].last().copied().unwrap();
+        assert!((alpha - 0.5).abs() <= 1.0 / 255.0, "{what}: alpha {alpha}");
+    }
+    // Opaque documents are written as before.
+    let r = export(&columns(ColorMode::Rgb, SampleType::U8, &[&[0.2, 0.4, 0.6, 1.0]]), "a.jpg", &ExportOptions::default()).unwrap();
+    assert!(!r.warnings.iter().any(|w| w.contains("composited")), "{:?}", r.warnings);
+}
+
 /// Formats that can't embed a profile get sRGB values (what an untagged file means), converted
 /// through the colour engine, instead of values that only mean something under the dropped profile.
 #[test]
