@@ -272,6 +272,7 @@ impl PhotocraftMcp {
                 // of the document (`Session::edit`), so the session is still
                 // consistent: keep serving instead of failing every later call.
                 let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
+                g.sync_jobs();
                 f(&mut g)
             })
             .await
@@ -694,5 +695,28 @@ mod tests {
         assert!(r.is_err());
         let r = mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap();
         assert!(r.is_ok(), "session still usable after a panic: {r:?}");
+    }
+
+    /// The MCP server applies finished jobs before every tool call too (#503).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mcp_tools_see_a_finished_background_job() {
+        let mcp = PhotocraftMcp::headless();
+        mcp.headless_op(|h| {
+            h.command_run("file.new", json!({"width": 64, "height": 48}))?;
+            h.command_run("filter.noise.addNoise", json!({"amount": 50}))?;
+            h.command_start("filter.blur.gaussianBlur", json!({"radius": 4}), false)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        let t = std::time::Instant::now();
+        loop {
+            let inspected = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+            if inspected["history"].as_array().unwrap().last().unwrap() == "Gaussian Blur" {
+                break;
+            }
+            assert!(t.elapsed().as_secs() < 60, "doc_inspect never saw the finished job: {inspected}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }

@@ -61,6 +61,7 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
+        self.sync_jobs();
         let p = if params.is_null() { json!({}) } else { params };
         match method {
             "engine.execute" => {
@@ -444,6 +445,37 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
             h.handle("jobs.list", json!({})).unwrap();
         }
+    }
+
+    /// Regression (#503): a finished `wait: false` job was only applied by a later command or
+    /// `jobs.list`, so save, inspect, render and `session.list` still saw the document without it.
+    #[test]
+    fn every_request_sees_a_finished_background_job() {
+        let dir = std::env::temp_dir().join(format!("pc-rpc-job-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (before, after) = (dir.join("before.png"), dir.join("after.png"));
+        let mut h = Headless::trusted_local();
+        h.handle("doc.new", json!({"width": 64, "height": 48})).unwrap();
+        h.handle("engine.execute", json!({"command": "filter.noise.addNoise", "params": {"amount": 50}})).unwrap();
+        h.handle("doc.save", json!({"path": before.to_string_lossy()})).unwrap();
+        let render = |h: &mut Headless| h.handle("doc.render", json!({"maxSide": 0})).unwrap()["base64"].clone();
+        let unblurred = render(&mut h);
+        let revision = |h: &mut Headless| h.handle("session.list", json!({})).unwrap()["documents"][0]["revision"].clone();
+        let start = revision(&mut h);
+        h.handle("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 4}, "wait": false})).unwrap();
+        // Only reading requests from here on: no command and no `jobs.list`.
+        let t = std::time::Instant::now();
+        while revision(&mut h) == start {
+            assert!(t.elapsed().as_secs() < 60, "session.list never saw the finished job");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let history = h.handle("doc.inspect", json!({})).unwrap()["history"].clone();
+        assert_eq!(history.as_array().unwrap().last().unwrap(), "Gaussian Blur", "{history}");
+        h.handle("doc.save", json!({"path": after.to_string_lossy()})).unwrap();
+        let decode = |p: &std::path::Path| photocraft_codecs::decode(&std::fs::read(p).unwrap()).unwrap().to_rgba8();
+        assert_ne!(decode(&before), decode(&after), "the export holds the blur");
+        assert_ne!(render(&mut h), unblurred, "the preview holds the blur");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

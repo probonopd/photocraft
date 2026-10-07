@@ -195,7 +195,7 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | Method | Params |
 |---|---|
 | `engine.execute` | `{command, params?, wait?}`: any engine command (`wait: false` starts a long one as a background job: `{job, pending}`) |
-| `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs (applying finished ones); cancel one or all |
+| `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs; cancel one or all. Every request (and MCP tool call) first applies the jobs that finished, so `doc.save`, `doc.inspect`, `doc.render` and `session.list` include a finished job's result without polling `jobs.list` first |
 | `engine.commands` | `{filter?}`: registry with params docs and enablement |
 | `session.list` | open documents and the active index |
 | `doc.open` / `doc.new` | `{path}` / `file.new` params |
