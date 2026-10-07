@@ -139,6 +139,12 @@ impl Headless {
     /// `{method, params?}` (any [`METHODS`] entry). Stops at the first error unless
     /// `stopOnError` is false; the reply lists every step's result.
     pub fn batch(&mut self, p: &Value) -> Result<Value, AutomationError> {
+        self.batch_with_budget(p, BatchReplyBudget::default())
+    }
+
+    /// [`Headless::batch`] with a caller's reply budget (MCP charges escaped sizes, see
+    /// [`BatchReplyBudget::escaped`]). Steps stop once the budget runs out.
+    pub fn batch_with_budget(&mut self, p: &Value, mut reply_budget: BatchReplyBudget) -> Result<Value, AutomationError> {
         let steps = p.get("steps").and_then(Value::as_array).ok_or_else(|| bad("batch needs `steps`"))?;
         if steps.len() > MAX_BATCH_STEPS {
             return Err(bad(format!("batch contains {} steps; maximum is {MAX_BATCH_STEPS}", steps.len())));
@@ -146,7 +152,6 @@ impl Headless {
         let stop = p.get("stopOnError").and_then(Value::as_bool).unwrap_or(true);
         let mut results = Vec::with_capacity(steps.len());
         let mut failed = 0usize;
-        let mut reply_budget = BatchReplyBudget::default();
         for (i, s) in steps.iter().enumerate() {
             let params = s.get("params").cloned().unwrap_or(Value::Null);
             let r = if let Some(c) = str_of(s, "command") {

@@ -234,6 +234,10 @@ enforces the request and reply byte ceilings. A TCP connection is closed after a
 line; on stdio an oversized or non-UTF-8 line gets one error reply (`id: null`), the rest of that
 line is skipped without being dispatched, and the session and its open documents keep serving. MCP tool results are checked as encoded JSON,
 including the text/image content envelope, and the MCP bridge bounds incoming desktop replies.
+A `batch` or `command_batch` stops at the first step whose result no longer fits the reply budget
+(that step may have run; later ones do not). MCP charges each result at its size escaped inside
+the text content, so the reply still lists `completed`, `failed` and every result so far, ending
+with the budget error.
 
 Headless automation previews (`doc.render` / MCP `doc_render_preview`) allow a maximum requested
 edge of 2048 pixels and a source document of at most 67,108,864 pixels. `maxSide: 0` (MCP
