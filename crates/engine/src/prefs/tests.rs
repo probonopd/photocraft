@@ -927,3 +927,9 @@ fn a_stranded_backup_is_named_in_the_error() {
     assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn global_menu_preference_shows_on_linux_and_the_bsds_only() {
+    assert_eq!(is_hidden("interface.globalMenuBar"), !cfg!(all(unix, not(target_os = "macos"))));
+    assert!(X11_DESKTOP_ONLY.iter().all(|p| !HIDDEN_UNTIL_IMPLEMENTED.contains(p)));
+}
