@@ -452,3 +452,9 @@ fn linux_only_preferences_show_only_on_linux() {
     assert!(!is_hidden("performance.gpuBackend"));
     assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
 }
+
+#[test]
+fn global_menu_preference_shows_on_linux_and_the_bsds_only() {
+    assert_eq!(is_hidden("interface.globalMenuBar"), !cfg!(all(unix, not(target_os = "macos"))));
+    assert!(X11_DESKTOP_ONLY.iter().all(|p| !HIDDEN_UNTIL_IMPLEMENTED.contains(p)));
+}
